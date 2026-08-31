@@ -1,0 +1,16 @@
+{
+    "name": "nepstrat-alpha-beta-updater",
+    "version": "1.0.0",
+    "type": "module",
+    "description": "Alpha/Beta updater script for NEPSTRAT",
+    "scripts": {
+        "start": "node api/alpha-beta.js"
+    },
+    "dependencies": {
+        "@supabase/supabase-js": "^2.39.0"
+    },
+    "engines": {
+        "node": ">=18.0.0"
+    },
+    "license": "MIT"
+}
