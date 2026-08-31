@@ -140,14 +140,13 @@ async function calculateAlphaBeta(symbol) {
     }
 }
 
-// ─── Update Symbols with Pagination ─────────────────────────────────────────
 async function updateSymbolsBatch(offset = 0, limit = 10) {
     console.log(`\n🔄 Processing batch: offset=${offset}, limit=${limit}`);
 
-    // Get symbols with pagination
-    const { data: symbols, error: symbolsError, count } = await supabase
-        .from('stock_prices')
-        .select('symbol', { count: 'exact', head: false })
+    // ─── Get distinct symbols from the symbols table ──────────────────────
+    const { data: symbols, error: symbolsError } = await supabase
+        .from('symbols')
+        .select('symbol')
         .order('symbol')
         .range(offset, offset + limit - 1);
 
@@ -156,21 +155,48 @@ async function updateSymbolsBatch(offset = 0, limit = 10) {
         return { success: false, error: symbolsError?.message };
     }
 
-    const uniqueSymbols = [...new Set(symbols.map(s => s.symbol))];
-    console.log(`📊 Processing ${uniqueSymbols.length} symbols (offset ${offset})`);
+    if (symbols.length === 0) {
+        console.log('📊 No more symbols to process');
+        return {
+            success: true,
+            offset,
+            limit,
+            processed: 0,
+            failed: 0,
+            failedSymbols: [],
+            totalSymbols: 0,
+            hasMore: false,
+            nextOffset: offset,
+            timestamp: new Date().toISOString()
+        };
+    }
+
+    const symbolList = symbols.map(s => s.symbol);
+    console.log(`📊 Processing ${symbolList.length} symbols: ${symbolList.join(', ')}`);
+
+    // ─── Get total symbol count for pagination ────────────────────────────
+    const { count, error: countError } = await supabase
+        .from('symbols')
+        .select('*', { count: 'exact', head: true });
+
+    if (countError) {
+        console.warn('⚠️ Could not get total symbol count:', countError.message);
+    }
 
     let processed = 0;
     let failed = 0;
     const failedSymbols = [];
 
-    for (const symbol of uniqueSymbols) {
+    for (const symbol of symbolList) {
         try {
             const result = await calculateAlphaBeta(symbol);
             if (result) {
                 processed++;
+                console.log(`✅ [${symbol}] Processed successfully`);
             } else {
                 failed++;
                 failedSymbols.push(symbol);
+                console.warn(`⚠️ [${symbol}] Failed to process`);
             }
         } catch (err) {
             console.error(`[${symbol}] ❌ Error:`, err.message);
@@ -179,6 +205,8 @@ async function updateSymbolsBatch(offset = 0, limit = 10) {
         }
     }
 
+    console.log(`📊 Batch complete: ${processed} processed, ${failed} failed`);
+
     return {
         success: true,
         offset,
@@ -186,22 +214,21 @@ async function updateSymbolsBatch(offset = 0, limit = 10) {
         processed,
         failed,
         failedSymbols,
-        totalSymbols: count || uniqueSymbols.length,
-        hasMore: (offset + limit) < (count || uniqueSymbols.length),
+        totalSymbols: count || symbolList.length,
+        hasMore: (offset + limit) < (count || symbolList.length),
         nextOffset: offset + limit,
         timestamp: new Date().toISOString()
     };
 }
 
-// ─── Update All Symbols (Processes All) ─────────────────────────────────────
 async function updateAllSymbols() {
     console.log('\n🔄 Starting full Alpha/Beta update for ALL symbols...');
     const startTime = Date.now();
 
-    // Get total count
+    // ─── Get total symbol count from symbols table ────────────────────────
     const { count, error: countError } = await supabase
-        .from('stock_prices')
-        .select('symbol', { count: 'exact', head: true });
+        .from('symbols')
+        .select('*', { count: 'exact', head: true });
 
     if (countError) {
         console.error('❌ Failed to get symbol count:', countError.message);
@@ -393,6 +420,38 @@ app.get('/symbol/:symbol', async (req, res) => {
 // ─── Status ──────────────────────────────────────────────────────────────────
 app.get('/status', (req, res) => {
     res.json(lastRunStatus);
+});
+
+// ─── Debug Route ─────────────────────────────────────────────────────────────
+app.get('/debug/symbols', async (req, res) => {
+    try {
+        // Get count from symbols table
+        const { count, error: countError } = await supabase
+            .from('symbols')
+            .select('*', { count: 'exact', head: true });
+
+        if (countError) {
+            return res.status(500).json({ error: countError.message });
+        }
+
+        // Get first 20 symbols
+        const { data, error } = await supabase
+            .from('symbols')
+            .select('symbol')
+            .order('symbol')
+            .limit(20);
+
+        if (error) {
+            return res.status(500).json({ error: error.message });
+        }
+
+        res.json({
+            totalSymbols: count || 0,
+            sampleSymbols: data?.map(s => s.symbol) || []
+        });
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
 });
 
 // ─── Start Server ────────────────────────────────────────────────────────────
