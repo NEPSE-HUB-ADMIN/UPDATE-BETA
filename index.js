@@ -140,6 +140,7 @@ async function calculateAlphaBeta(symbol) {
     }
 }
 
+// ─── Update Symbols with Pagination ─────────────────────────────────────────
 async function updateSymbolsBatch(offset = 0, limit = 10) {
     console.log(`\n🔄 Processing batch: offset=${offset}, limit=${limit}`);
 
@@ -221,6 +222,7 @@ async function updateSymbolsBatch(offset = 0, limit = 10) {
     };
 }
 
+// ─── Update All Symbols ──────────────────────────────────────────────────────
 async function updateAllSymbols() {
     console.log('\n🔄 Starting full Alpha/Beta update for ALL symbols...');
     const startTime = Date.now();
@@ -291,13 +293,8 @@ app.get('/', (req, res) => {
             { method: 'GET', path: '/run?offset=0&limit=10', description: 'Process batch (10 symbols)' },
             { method: 'GET', path: '/symbol/:symbol', description: 'Update single symbol' },
             { method: 'GET', path: '/status', description: 'Check last run status' },
-            { method: 'GET', path: '/total', description: 'Get total symbol count' }
-        ],
-        pagination: {
-            defaultLimit: 10,
-            maxLimit: 50,
-            usage: '/run?offset=0&limit=10'
-        }
+            { method: 'GET', path: '/debug/symbols', description: 'Debug - list symbols' }
+        ]
     });
 });
 
@@ -310,20 +307,34 @@ app.get('/health', (req, res) => {
     });
 });
 
-// ─── Get Total Symbol Count ──────────────────────────────────────────────────
-app.get('/total', async (req, res) => {
-    const { count, error } = await supabase
-        .from('stock_prices')
-        .select('symbol', { count: 'exact', head: true });
+// ─── Debug Route ─────────────────────────────────────────────────────────────
+app.get('/debug/symbols', async (req, res) => {
+    try {
+        const { count, error: countError } = await supabase
+            .from('symbols')
+            .select('*', { count: 'exact', head: true });
 
-    if (error) {
-        return res.status(500).json({ error: error.message });
+        if (countError) {
+            return res.status(500).json({ error: countError.message });
+        }
+
+        const { data, error } = await supabase
+            .from('symbols')
+            .select('symbol')
+            .order('symbol')
+            .limit(20);
+
+        if (error) {
+            return res.status(500).json({ error: error.message });
+        }
+
+        res.json({
+            totalSymbols: count || 0,
+            sampleSymbols: data?.map(s => s.symbol) || []
+        });
+    } catch (err) {
+        res.status(500).json({ error: err.message });
     }
-
-    res.json({
-        totalSymbols: count,
-        timestamp: new Date().toISOString()
-    });
 });
 
 // ─── Batch Update with Pagination ───────────────────────────────────────────
@@ -332,7 +343,7 @@ let lastRunStatus = { running: false, lastRun: null };
 app.get('/run', async (req, res) => {
     const { offset, limit } = req.query;
     const parsedOffset = parseInt(offset) || 0;
-    const parsedLimit = Math.min(parseInt(limit) || 10, 50); // Max 50 per batch
+    const parsedLimit = Math.min(parseInt(limit) || 10, 50);
 
     if (lastRunStatus.running) {
         return res.status(409).json({
@@ -341,7 +352,6 @@ app.get('/run', async (req, res) => {
         });
     }
 
-    // Check if this is a batch request or full update
     const isBatch = req.query.offset !== undefined || req.query.limit !== undefined;
 
     lastRunStatus = { 
@@ -350,7 +360,6 @@ app.get('/run', async (req, res) => {
         mode: isBatch ? 'batch' : 'full'
     };
 
-    // Send immediate response
     res.json({
         message: isBatch ? 'Batch update started' : 'Full update started',
         started: lastRunStatus.started,
@@ -359,7 +368,6 @@ app.get('/run', async (req, res) => {
         status_url: '/status'
     });
 
-    // Run update in background
     setTimeout(async () => {
         try {
             let result;
@@ -422,38 +430,6 @@ app.get('/status', (req, res) => {
     res.json(lastRunStatus);
 });
 
-// ─── Debug Route ─────────────────────────────────────────────────────────────
-app.get('/debug/symbols', async (req, res) => {
-    try {
-        // Get count from symbols table
-        const { count, error: countError } = await supabase
-            .from('symbols')
-            .select('*', { count: 'exact', head: true });
-
-        if (countError) {
-            return res.status(500).json({ error: countError.message });
-        }
-
-        // Get first 20 symbols
-        const { data, error } = await supabase
-            .from('symbols')
-            .select('symbol')
-            .order('symbol')
-            .limit(20);
-
-        if (error) {
-            return res.status(500).json({ error: error.message });
-        }
-
-        res.json({
-            totalSymbols: count || 0,
-            sampleSymbols: data?.map(s => s.symbol) || []
-        });
-    } catch (err) {
-        res.status(500).json({ error: err.message });
-    }
-});
-
 // ─── Start Server ────────────────────────────────────────────────────────────
 app.listen(PORT, async () => {
     console.log('═══════════════════════════════════════════════════════════');
@@ -464,24 +440,18 @@ app.listen(PORT, async () => {
     console.log('\n📊 Endpoints:');
     console.log(`   GET  /                    - Service info`);
     console.log(`   GET  /health              - Health check`);
-    console.log(`   GET  /total               - Get total symbol count`);
+    console.log(`   GET  /debug/symbols       - List symbols`);
     console.log(`   GET  /run                 - Update ALL symbols`);
-    console.log(`   GET  /run?offset=0&limit=10 - Process batch (10 symbols)`);
-    console.log(`   GET  /status              - Check last run status`);
+    console.log(`   GET  /run?offset=0&limit=10 - Process batch`);
     console.log(`   GET  /symbol/:symbol      - Update single symbol`);
-    console.log('\n🔗 Examples:');
-    console.log(`   curl https://your-app.onrender.com/run`);
-    console.log(`   curl https://your-app.onrender.com/run?offset=0&limit=10`);
-    console.log(`   curl https://your-app.onrender.com/symbol/NABIL`);
+    console.log(`   GET  /status              - Check last run status`);
     console.log('═══════════════════════════════════════════════════════════\n');
 
-    // Get total symbol count on startup
     try {
         const { count } = await supabase
-            .from('stock_prices')
-            .select('symbol', { count: 'exact', head: true });
-        console.log(`📊 Total symbols available: ${count}`);
-        console.log(`📦 Processing 10 symbols per batch\n`);
+            .from('symbols')
+            .select('*', { count: 'exact', head: true });
+        console.log(`📊 Total distinct symbols: ${count}`);
     } catch (err) {
         console.log('⚠️ Could not fetch symbol count');
     }
